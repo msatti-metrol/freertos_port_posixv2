@@ -188,6 +188,10 @@ BaseType_t xPortStartScheduler(void)
     // Ensure internal FreeRTOS state is visible to other threads (ie: pxCurrentTCB).
     std::atomic_thread_fence(std::memory_order::release);
 
+    // Ensure SIGNAL_SCHEDULER_END cannot be missed later on. 
+    auto mask = PosixV2::Posix::SaveSignalMask(false);
+    PosixV2::Posix::BlockSignal(SIGNAL_SCHEDULER_END);
+
     // Initialize scheduler state.
     {
         PosixV2::Posix::SetThreadName("Scheduler");
@@ -237,6 +241,9 @@ BaseType_t xPortStartScheduler(void)
         PosixV2::Posix::InstallDefaultSignalHandler(SIGNAL_RESUME);
         PosixV2::Posix::InstallDefaultSignalHandler(SIGNAL_TICK);
     }
+
+    // Restore signal mask from before.
+    PosixV2::Posix::RestoreSignalMask(mask);
 
     return pdTRUE;
 }
