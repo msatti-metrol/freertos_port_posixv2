@@ -1,42 +1,40 @@
 #pragma once
 
 #include <concepts>
+#include <mutex>
 #include "posix_v2/interrupt_state.hpp"
 
 namespace PosixV2
 {
     inline void InterruptState_t::SetInterruptsEnabled() noexcept
     {
-        m_interruptsEnabledLock.Lock();
+        std::unique_lock lock{m_interruptsEnabledLock};
+        
         m_interruptsEnabled = true;
-        m_interruptsEnabledLock.Unlock();
     }
 
     inline void InterruptState_t::SetInterruptsDisabled() noexcept
     {
-        m_interruptsEnabledLock.Lock();
+        std::unique_lock lock{m_interruptsEnabledLock};
+
         m_interruptsEnabled = false;
-        m_interruptsEnabledLock.Unlock();
     }
 
     template<std::invocable<bool> ContinuationFn>
     inline bool InterruptState_t::TryQueryInterruptsStatus(ContinuationFn&& continuationFn) noexcept
     {
-        if (!m_interruptsEnabledLock.TryLock())
+        std::unique_lock lock{m_interruptsEnabledLock, std::try_to_lock};
+
+        if (!lock)
             return false;
 
-        auto result = continuationFn(m_interruptsEnabled);
-
-        m_interruptsEnabledLock.Unlock();
-
-        return result;
+        return continuationFn(m_interruptsEnabled);
     }
 
     inline bool InterruptState_t::GetInterruptsStatus() noexcept
     {
-        m_interruptsEnabledLock.Lock();
-        bool result = m_interruptsEnabled;
-        m_interruptsEnabledLock.Unlock();
-        return result;
+        std::unique_lock lock{m_interruptsEnabledLock};
+
+        return m_interruptsEnabled;
     }
 }
