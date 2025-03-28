@@ -11,6 +11,8 @@ add_library(freertos_kernel_port OBJECT)
 target_sources(freertos_kernel_port
     PRIVATE
         source/src/port.cpp
+        source/src/kernel.cpp
+        source/src/peripheral.cpp
     PUBLIC
         FILE_SET headers TYPE HEADERS BASE_DIRS source/include FILES 
             source/include/portmacro.h
@@ -21,6 +23,8 @@ target_sources(freertos_kernel_port
             source/include/posix_v2/spinlock.hpp
             source/include/posix_v2/spinlock.tpp
             source/include/posix_v2/task_context.hpp
+            source/include/posix_v2/kernel.hpp
+            source/include/posix_v2/peripheral.hpp
 )
 
 target_compile_features(freertos_kernel_port PRIVATE cxx_std_23)

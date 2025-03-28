@@ -6,23 +6,25 @@
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <mutex>
+#include <functional>
+#include <unordered_map>
 #include <signal.h>
 #include <unistd.h>
+#include <pthread.h>
 #include "portmacro.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "posix_v2/interrupt_state.hpp"
 #include "posix_v2/posix.hpp"
 #include "posix_v2/task_context.hpp"
+#include "posix_v2/kernel.hpp"
+#include "posix_v2/peripheral.hpp"
 
 /// Notes:
 /// - Each task has an associated POSIX thread (pthread).
 /// - A real task stack doesn't exist; the stack is a buffer used to store the port task state only.
 /// - No nested "interrupts" support; all interrupts (like tick) must be handled within a critical section.
-
-#define SIGNAL_SCHEDULER_END (SIGRTMIN + 0)
-#define SIGNAL_RESUME (SIGRTMIN + 1)
-#define SIGNAL_TICK (SIGRTMIN + 2)
 
 static_assert(portBYTE_ALIGNMENT >= alignof(PosixV2::TaskContext::Context_t), "Byte alignment requirement not met");
 static_assert(portSTACK_GROWTH == 1, "Stack growth direction must be set to 1 (low to high)");
@@ -30,56 +32,13 @@ static_assert(configMINIMAL_STACK_SIZE >= (sizeof(PosixV2::TaskContext::Context_
 static_assert(configCHECK_FOR_STACK_OVERFLOW == 0, "Stack overflow checking must be set to 0");
 static_assert(std::is_same_v<long, configRUN_TIME_COUNTER_TYPE>, "Expecting run time counter type to be of type long");
 
-static std::atomic_bool g_schedulerStarted;
-static std::atomic_bool g_schedulerStopping;
-static std::atomic<std::chrono::steady_clock::time_point> g_schedulerStartTimePoint;
-static std::atomic<pthread_t> g_schedulerThreadHandle;
-static std::atomic<pthread_t> g_tickThreadHandle;
-static std::mutex g_kernelLock;
+static PosixV2::Peripheral::Tick::Peripheral_t g_tickPeripheral{"Tick"};
 
-static void* TickThreadMain([[maybe_unused]] void* parameters)
+static void HandleSignalPeripheralInterrupt(int signal, siginfo_t* info, [[maybe_unused]] void* ucontext)
 {
-    PosixV2::Posix::SetThreadName("Tick");
-
-    while (!g_schedulerStopping.load(std::memory_order::relaxed))
-    {
-        std::atomic_thread_fence(std::memory_order::acquire);
-
-        g_kernelLock.lock();
-        
-        auto& task = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
-
-        auto result = task.m_interruptState.TryQueryInterruptsStatus(
-            [&](bool interruptsEnabled) 
-            { 
-                if (!interruptsEnabled)
-                    return false;
-
-                PosixV2::Posix::RaiseSignal(task.m_threadHandle, SIGNAL_TICK);
-                return true;
-            });
-
-        g_kernelLock.unlock();
-
-        if (result)
-            usleep(portTICK_RATE_MICROSECONDS);
-        else
-            PosixV2::Pause();
-    }
-
-    return nullptr;
-}
-
-static void HandleSignalTick(int signal)
-{
-    assert((signal == SIGNAL_TICK) && "Unexpected signal");
-
-    vPortEnterCritical();
-
-    if (xTaskIncrementTick() == pdTRUE)
-        vPortYield();
-
-    vPortExitCritical();
+    assert((signal == SIGNAL_PERIPHERAL_INTERRUPT) && "Unexpected signal");
+    auto peripheral = reinterpret_cast<PosixV2::Peripheral::Peripheral_t*>(info->si_value.sival_ptr);
+    peripheral->OnHandleInterrupt();
 }
 
 static void* TaskThreadMain(void* parameters)
@@ -90,7 +49,7 @@ static void* TaskThreadMain(void* parameters)
     // Interrupts are disabled to start with, preventing ticks & other ISRs.
     PosixV2::Posix::WaitForSignal(SIGNAL_RESUME);
     PosixV2::Posix::UnblockSignal(SIGNAL_RESUME);
-    PosixV2::Posix::UnblockSignal(SIGNAL_TICK);
+    PosixV2::Posix::UnblockSignal(SIGNAL_PERIPHERAL_INTERRUPT);
 
     std::atomic_signal_fence(std::memory_order::acquire);
 
@@ -167,15 +126,13 @@ void vPortInitializeTask(TaskHandle_t taskHandle)
 
 void vPortDestructTask(TaskHandle_t taskHandle)
 {
-    g_kernelLock.lock();
+    std::unique_lock lock{PosixV2::Kernel::g_state.m_taskContextLock};
 
     auto& task = PosixV2::TaskContext::BorrowFromTaskHandle(taskHandle);
 
     PosixV2::Posix::CancelThread(task.m_threadHandle);
     PosixV2::Posix::JoinThread(task.m_threadHandle);
     PosixV2::TaskContext::DeleteFromTaskHandle(taskHandle);
-
-    g_kernelLock.unlock();
 }
 
 static void HandleSignalSchedulerEnd(int signal)
@@ -197,12 +154,11 @@ BaseType_t xPortStartScheduler(void)
         PosixV2::Posix::SetThreadName("Scheduler");
         PosixV2::Posix::InstallSignalHandler(SIGNAL_SCHEDULER_END, HandleSignalSchedulerEnd);
         PosixV2::Posix::InstallSignalHandler(SIGNAL_RESUME, HandleSignalResume);
-        PosixV2::Posix::InstallSignalHandler(SIGNAL_TICK, HandleSignalTick);
+        PosixV2::Posix::InstallExtendedSignalHandler(SIGNAL_PERIPHERAL_INTERRUPT, HandleSignalPeripheralInterrupt);
 
-        g_schedulerStarted.store(true, std::memory_order::relaxed);
-        g_schedulerStopping.store(false, std::memory_order::relaxed);
+        PosixV2::Kernel::g_state.m_schedulerStarted.store(true, std::memory_order::relaxed);
         auto selfThreadHandle = pthread_self();
-        g_schedulerThreadHandle.store(selfThreadHandle, std::memory_order::relaxed); 
+        PosixV2::Kernel::g_state.m_schedulerThreadHandle.store(selfThreadHandle, std::memory_order::relaxed); 
     }
 
     // Transfer control to current task.
@@ -211,10 +167,9 @@ BaseType_t xPortStartScheduler(void)
         PosixV2::Posix::RaiseSignal(task.m_threadHandle, SIGNAL_RESUME);
     }
 
-    // Initialize peripheral simulator(s).
+    // Initialize required peripheral simulator(s).
     {
-        auto tickThreadHandle = PosixV2::Posix::CreateThread(TickThreadMain, nullptr);
-        g_tickThreadHandle.store(tickThreadHandle, std::memory_order::relaxed);
+        PosixV2::Peripheral::Peripheral_t::StartPeripheral(g_tickPeripheral);
     }
         
     // Wait for signal to end the scheduler.
@@ -225,21 +180,18 @@ BaseType_t xPortStartScheduler(void)
 
     // Destruct peripheral simulator(s).
     {
-        g_schedulerStopping.store(true, std::memory_order::relaxed);
-
-        auto tickThreadHandle = g_tickThreadHandle.load(std::memory_order::relaxed);
-        PosixV2::Posix::JoinThread(tickThreadHandle);
+        PosixV2::Peripheral::Peripheral_t::StopAllPeripherals();
     }
 
     // Destruct remaining task and scheduler state.
     {
-        g_schedulerStarted.store(false, std::memory_order::relaxed);
+        PosixV2::Kernel::g_state.m_schedulerStarted.store(false, std::memory_order::relaxed);
         
         vTaskDelete(xTaskGetCurrentTaskHandle());
 
         PosixV2::Posix::InstallDefaultSignalHandler(SIGNAL_SCHEDULER_END);
         PosixV2::Posix::InstallDefaultSignalHandler(SIGNAL_RESUME);
-        PosixV2::Posix::InstallDefaultSignalHandler(SIGNAL_TICK);
+        PosixV2::Posix::InstallDefaultSignalHandler(SIGNAL_PERIPHERAL_INTERRUPT);
     }
 
     // Restore signal mask from before.
@@ -256,7 +208,7 @@ void vPortEndScheduler(void)
 
     self.m_interruptState.SetInterruptsDisabled();
     PosixV2::Posix::SaveSignalMask();
-    PosixV2::Posix::RaiseSignal(g_schedulerThreadHandle, SIGNAL_SCHEDULER_END);
+    PosixV2::Posix::RaiseSignal(PosixV2::Kernel::g_state.m_schedulerThreadHandle, SIGNAL_SCHEDULER_END);
     PosixV2::Posix::ExitThread();
 }
 
@@ -267,7 +219,7 @@ void vPortMemoryBarrier()
 
 void vPortYield()
 {
-    assert(g_schedulerStarted.load(std::memory_order::relaxed) && "Expecting scheduler to be started");
+    assert(PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed) && "Expecting scheduler to be started");
     
     vPortEnterCritical();
     
@@ -284,7 +236,7 @@ void vPortYield()
 
 void vPortDisableInterrupts()
 {
-    if (!g_schedulerStarted.load(std::memory_order::relaxed))
+    if (!PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed))
         return;
 
     auto& self = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
@@ -293,7 +245,7 @@ void vPortDisableInterrupts()
 
 void vPortEnableInterrupts()
 {
-    if (!g_schedulerStarted.load(std::memory_order::relaxed))
+    if (!PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed))
         return;
 
     auto& self = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
@@ -313,7 +265,7 @@ void vPortClearInterruptMask([[maybe_unused]] UBaseType_t xMask)
 
 void vPortEnterCritical(void)
 {
-    if (!g_schedulerStarted.load(std::memory_order::relaxed))
+    if (!PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed))
         return;
     
     auto& self = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
@@ -330,7 +282,7 @@ void vPortEnterCritical(void)
 
 void vPortExitCritical(void)
 {
-    if (!g_schedulerStarted.load(std::memory_order::relaxed))
+    if (!PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed))
         return;
 
     auto& self = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
@@ -346,12 +298,12 @@ void vPortExitCritical(void)
 void vPortInitializeTimer(void)
 {
     auto now = std::chrono::steady_clock::now();
-    g_schedulerStartTimePoint.store(now, std::memory_order::relaxed);
+    PosixV2::Kernel::g_state.m_schedulerStartTimePoint.store(now, std::memory_order::relaxed);
 }
 
 long lPortGetTimerCounter(void)
 {
-    auto start = g_schedulerStartTimePoint.load(std::memory_order::relaxed);
+    auto start = PosixV2::Kernel::g_state.m_schedulerStartTimePoint.load(std::memory_order::relaxed);
     auto now = std::chrono::steady_clock::now();
     std::chrono::duration<long, std::nano> duration = now - start;
     auto count = duration.count();
