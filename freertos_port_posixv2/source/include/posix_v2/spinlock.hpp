@@ -21,8 +21,11 @@ namespace PosixV2
         inline ~Spinlock_t() noexcept;
 
         inline void Lock() noexcept;
+        inline void lock() noexcept;
         inline bool TryLock() noexcept;
+        inline bool try_lock() noexcept;
         inline void Unlock() noexcept;
+        inline void unlock() noexcept;
 
     private:
         static constexpr bool LockedState = true;

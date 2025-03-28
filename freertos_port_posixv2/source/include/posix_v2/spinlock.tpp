@@ -33,14 +33,29 @@ namespace PosixV2
         }
     }
 
+    inline void Spinlock_t::lock() noexcept
+    {
+        Lock();
+    }
+
     inline bool Spinlock_t::TryLock() noexcept
     {
         return m_state.exchange(LockedState, std::memory_order::acquire) == UnlockedState;
+    }
+    
+    inline bool Spinlock_t::try_lock() noexcept
+    {
+        return TryLock();
     }
     
     inline void Spinlock_t::Unlock() noexcept
     {
         assert(m_state.load(std::memory_order::relaxed) == LockedState);
         m_state.store(UnlockedState, std::memory_order::release);
+    }
+    
+    inline void Spinlock_t::unlock() noexcept
+    {
+        Unlock();
     }
 }
