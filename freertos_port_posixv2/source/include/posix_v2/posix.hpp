@@ -7,6 +7,7 @@
 namespace PosixV2::Posix
 {
     using SignalHandler_t = void (*)(int);
+    using ExtendedSignalHandler_t = void (*)(int, siginfo_t*, void*);
     using StartRoutine_t = void* (*)(void *);
 
     /// Signaling
@@ -17,8 +18,10 @@ namespace PosixV2::Posix
     inline void UnblockSignal(int signal) noexcept;
     inline bool IsSignalBlocked(int signal) noexcept;
     inline void RaiseSignal(pthread_t thread, int signal) noexcept;
+    inline void RaiseContextualSignal(pthread_t thread, int signal, void* parameter) noexcept;
     inline void WaitForSignal(int signal);
     inline void InstallSignalHandler(int signal, SignalHandler_t signalHandler) noexcept;
+    inline void InstallExtendedSignalHandler(int signal, ExtendedSignalHandler_t signalHandler) noexcept;
     inline void InstallDefaultSignalHandler(int signal) noexcept;
 
     /// Thread (pthread)

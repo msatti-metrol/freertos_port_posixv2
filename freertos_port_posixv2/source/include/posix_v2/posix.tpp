@@ -60,6 +60,15 @@ namespace PosixV2::Posix
         if (pthread_kill(thread, signal) != 0)
             assert(false && "Failed to send signal to thread");
     }
+    
+    inline void RaiseContextualSignal(pthread_t thread, int signal, void* parameter) noexcept
+    {
+        sigval_t sigval{};
+        sigval.sival_ptr = parameter;
+
+        if (pthread_sigqueue(thread, signal, sigval) != 0)
+            assert(false && "Failed to send signal to thread");
+    }
 
     inline void WaitForSignal(int signal)
     {
@@ -75,6 +84,16 @@ namespace PosixV2::Posix
     {
         struct sigaction signalAction{};
         signalAction.sa_handler = signalHandler;
+        
+        if (sigaction(signal, &signalAction, nullptr) != 0)
+            assert(false && "Setting up signal handler failed");
+    }
+    
+    inline void InstallExtendedSignalHandler(int signal, ExtendedSignalHandler_t signalHandler) noexcept
+    {
+        struct sigaction signalAction{};
+        signalAction.sa_flags |= SA_SIGINFO;
+        signalAction.sa_sigaction = signalHandler;
         
         if (sigaction(signal, &signalAction, nullptr) != 0)
             assert(false && "Setting up signal handler failed");
