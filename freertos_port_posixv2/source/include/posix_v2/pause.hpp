@@ -19,6 +19,8 @@ namespace PosixV2
         _mm_pause();
 #elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
         __asm__ __volatile__("pause;");
+#else
+#warning "Pause implemented as an empty function"
 #endif
     }
 }

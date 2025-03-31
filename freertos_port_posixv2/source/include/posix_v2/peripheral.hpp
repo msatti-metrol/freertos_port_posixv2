@@ -10,54 +10,44 @@
 
 namespace PosixV2::Peripheral
 {
-    class Peripheral_t
+    struct IPeripheral_t
     {
-    public:
-        using Handle_t = std::unordered_set<Peripheral_t*>::iterator;
+        /// @brief Gets the name of the peripheral, used for debugging.
+        /// @return Name of the peripheral.
+        virtual const std::string& Name() = 0;
 
-        static Handle_t StartPeripheral(Peripheral_t& peripheral);
-        static void StopAllPeripherals();
+        /// @brief Determines whether an event is pending and an interrupt should be raised.
+        /// @return Whether a peripheral interrupt should be raised (within a FreeRTOS context).
+        /// @remarks
+        /// Called from outside a FreeRTOS task context.
+        /// Must eventually yield (can block for short periods of time).
+        virtual bool Poll() = 0;
 
-    private:
-        static void* ThreadMain(void* self);
-
-        static std::mutex s_peripheralsMutex;
-        static std::unordered_set<Peripheral_t*> s_peripherals;
-
-    public:
-        Peripheral_t(const std::string& name);
-
-        // Called from within FreeRTOS task context, inside signal handler.
-        // Must not block on I/O (FreeRTOS API excluded).
-        virtual void OnHandleInterrupt() = 0;
-
-    protected:
-        // Called from outside a FreeRTOS context within a separate thread.
-        // Must eventually yield (can block for short periods of time).
-        virtual bool OnPoll() = 0;
-        
-        // Called from outside a FreeRTOS context within a separate thread.
-        // Must eventually yield (can block for short periods of time).
+        /// @brief Interrupt raised callback.
+        /// @remarks
+        /// Whenever `Poll()` indicates an event is ready (returns true), an interrupt is attempted to be raised.
+        /// However it may not succeed due to the task servicing another interrupt or being inside a critical section.
+        /// Called from outside a FreeRTOS task context.
+        /// Must eventually yield (can block for short periods of time).
         virtual void OnInterruptRaised(bool success) = 0;
-        
-    private:
-        bool RaiseInterrupt();
 
-        std::optional<pthread_t> m_threadHandle;
-        std::atomic_bool m_stopping;
-        std::string m_name;
+        /// @brief Service interrupt callback (effectively the ISR handler).
+        /// @remarks
+        /// Called from within FreeRTOS task context, inside signal handler.
+        /// Must not block on any function calls, and they must be async-signal-safe.
+        /// The FreeRTOS ISR API can be used freely.
+        virtual void OnServiceInterrupt() = 0;
     };
 
     namespace Tick
     {
-        class Peripheral_t : public Peripheral::Peripheral_t
+        class Peripheral_t : public IPeripheral_t
         {
         public:
-            using Peripheral::Peripheral_t::Peripheral_t;
-            
-            virtual bool OnPoll() override;
-            virtual void OnHandleInterrupt() override;
+            virtual const std::string& Name() override;
+            virtual bool Poll() override;
             virtual void OnInterruptRaised(bool success) override;
+            virtual void OnServiceInterrupt() override;
         };
     }
 }

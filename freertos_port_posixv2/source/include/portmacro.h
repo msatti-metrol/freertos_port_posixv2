@@ -17,7 +17,6 @@ extern "C" {
 #define portSTACK_GROWTH 1
 #define portHAS_STACK_OVERFLOW_CHECKING 0
 #define portTICK_PERIOD_MS ((TickType_t)1000 / configTICK_RATE_HZ)
-#define portTICK_RATE_MICROSECONDS ((TickType_t)1000000 / configTICK_RATE_HZ)
 #define portBYTE_ALIGNMENT 8
 #define portHAS_NESTED_INTERRUPTS 0
 #define portYIELD() vPortYield()
