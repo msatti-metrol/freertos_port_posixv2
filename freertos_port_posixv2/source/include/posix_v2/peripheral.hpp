@@ -12,9 +12,11 @@ namespace PosixV2::Peripheral
 {
     struct IPeripheral_t
     {
+        virtual ~IPeripheral_t() = default;
+
         /// @brief Gets the name of the peripheral, used for debugging.
         /// @return Name of the peripheral.
-        virtual const std::string& Name() = 0;
+        virtual std::string Name() = 0;
 
         /// @brief Determines whether an event is pending and an interrupt should be raised.
         /// @return Whether a peripheral interrupt should be raised (within a FreeRTOS context).
@@ -44,7 +46,8 @@ namespace PosixV2::Peripheral
         class Peripheral_t : public IPeripheral_t
         {
         public:
-            virtual const std::string& Name() override;
+            virtual ~Peripheral_t() = default;
+            virtual std::string Name() override;
             virtual bool Poll() override;
             virtual void OnInterruptRaised(bool success) override;
             virtual void OnServiceInterrupt() override;

@@ -32,13 +32,10 @@ static_assert(configMINIMAL_STACK_SIZE >= (sizeof(PosixV2::TaskContext::Context_
 static_assert(configCHECK_FOR_STACK_OVERFLOW == 0, "Stack overflow checking must be set to 0");
 static_assert(std::is_same_v<long, configRUN_TIME_COUNTER_TYPE>, "Expecting run time counter type to be of type long");
 
-static PosixV2::Peripheral::Tick::Peripheral_t g_tickPeripheral{"Tick"};
-
 static void HandleSignalPeripheralInterrupt(int signal, siginfo_t* info, [[maybe_unused]] void* ucontext)
 {
     assert((signal == SIGNAL_PERIPHERAL_INTERRUPT) && "Unexpected signal");
-    auto peripheral = reinterpret_cast<PosixV2::Peripheral::Peripheral_t*>(info->si_value.sival_ptr);
-    peripheral->OnHandleInterrupt();
+    reinterpret_cast<PosixV2::Peripheral::IPeripheral_t*>(info->si_value.sival_ptr)->OnServiceInterrupt();
 }
 
 static void* TaskThreadMain(void* parameters)
@@ -142,6 +139,9 @@ static void HandleSignalSchedulerEnd(int signal)
 
 BaseType_t xPortStartScheduler(void)
 {
+    PosixV2::Peripheral::Tick::Peripheral_t tickPeripheral{};
+    PosixV2::Kernel::PortState_t::PeripheralHandle_t tickPeripheralHandle;
+
     // Ensure internal FreeRTOS state is visible to other threads (ie: pxCurrentTCB).
     std::atomic_thread_fence(std::memory_order::release);
 
@@ -169,7 +169,7 @@ BaseType_t xPortStartScheduler(void)
 
     // Initialize required peripheral simulator(s).
     {
-        PosixV2::Peripheral::Peripheral_t::StartPeripheral(g_tickPeripheral);
+        tickPeripheralHandle = PosixV2::Kernel::g_state.AddPeripheral(tickPeripheral);
     }
         
     // Wait for signal to end the scheduler.
@@ -180,7 +180,7 @@ BaseType_t xPortStartScheduler(void)
 
     // Destruct peripheral simulator(s).
     {
-        PosixV2::Peripheral::Peripheral_t::StopAllPeripherals();
+        PosixV2::Kernel::g_state.RemovePeripheral(tickPeripheralHandle);
     }
 
     // Destruct remaining task and scheduler state.

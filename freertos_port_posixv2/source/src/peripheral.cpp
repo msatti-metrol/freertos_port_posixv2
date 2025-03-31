@@ -12,7 +12,7 @@ namespace PosixV2::Peripheral
 {
     namespace Tick
     {
-        const std::string& Name()
+        std::string Peripheral_t::Name()
         {
             return "P. Tick";
         }
@@ -24,7 +24,7 @@ namespace PosixV2::Peripheral
 
         void Peripheral_t::OnInterruptRaised(bool success)
         {
-            constexpr std::chrono::duration<useconds_t, std::micro> Period = 1000000 / configTICK_RATE_HZ;
+            constexpr std::chrono::duration<useconds_t, std::micro> Period = std::chrono::duration<useconds_t, std::micro>{1000000 / configTICK_RATE_HZ};
 
             if (success)
                 usleep(Period.count());
