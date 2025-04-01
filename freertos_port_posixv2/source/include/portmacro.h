@@ -20,7 +20,7 @@ extern "C" {
 #define portBYTE_ALIGNMENT 8
 #define portHAS_NESTED_INTERRUPTS 0
 #define portYIELD() vPortYield()
-#define portYIELD_FROM_ISR(x) vPortYield()
+#define portYIELD_FROM_ISR(x) vPortYieldMaybe(x)
 #define portDISABLE_INTERRUPTS() vPortDisableInterrupts()
 #define portENABLE_INTERRUPTS() vPortEnableInterrupts()
 #define portENTER_CRITICAL() vPortEnterCritical()
@@ -49,6 +49,7 @@ BaseType_t xPortStartScheduler(void);
 void vPortEndScheduler(void);
 void vPortMemoryBarrier();
 void vPortYield(void);
+void vPortYieldMaybe(BaseType_t pxHigherPriorityTaskWoken);
 void vPortDisableInterrupts(void);
 void vPortEnableInterrupts(void);
 UBaseType_t xPortSetInterruptMask(void);
@@ -57,6 +58,7 @@ void vPortEnterCritical(void);
 void vPortExitCritical(void);
 void vPortInitializeTimer(void);
 long lPortGetTimerCounter(void);
+void vPortStartUserPeripherals(void);
 
 #ifdef __cplusplus
 }

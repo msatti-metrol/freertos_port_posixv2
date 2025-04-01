@@ -137,6 +137,10 @@ static void HandleSignalSchedulerEnd(int signal)
     assert((signal == SIGNAL_SCHEDULER_END) && "Unexpected signal");
 }
 
+__attribute__((weak)) void vPortStartUserPeripherals() 
+{
+}
+
 BaseType_t xPortStartScheduler(void)
 {
     PosixV2::Peripheral::Tick::Peripheral_t tickPeripheral{};
@@ -169,6 +173,7 @@ BaseType_t xPortStartScheduler(void)
     // Initialize required peripheral simulator(s).
     {
         PosixV2::Kernel::g_kernel.AddPeripheral(tickPeripheral);
+        vPortStartUserPeripherals();
     }
         
     // Wait for signal to end the scheduler.
@@ -231,6 +236,12 @@ void vPortYield()
     SwitchActiveTask(self, next);
 
     vPortExitCritical();
+}
+
+void vPortYieldMaybe(BaseType_t pxHigherPriorityTaskWoken)
+{
+    if (pxHigherPriorityTaskWoken == pdTRUE)
+        vPortYield();
 }
 
 void vPortDisableInterrupts()
