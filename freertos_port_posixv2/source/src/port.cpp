@@ -123,7 +123,7 @@ void vPortInitializeTask(TaskHandle_t taskHandle)
 
 void vPortDestructTask(TaskHandle_t taskHandle)
 {
-    std::unique_lock lock{PosixV2::Kernel::g_state.m_taskContextLock};
+    std::unique_lock lock{PosixV2::Kernel::g_kernel.m_taskContextLock};
 
     auto& task = PosixV2::TaskContext::BorrowFromTaskHandle(taskHandle);
 
@@ -140,7 +140,6 @@ static void HandleSignalSchedulerEnd(int signal)
 BaseType_t xPortStartScheduler(void)
 {
     PosixV2::Peripheral::Tick::Peripheral_t tickPeripheral{};
-    PosixV2::Kernel::PortState_t::PeripheralHandle_t tickPeripheralHandle;
 
     // Ensure internal FreeRTOS state is visible to other threads (ie: pxCurrentTCB).
     std::atomic_thread_fence(std::memory_order::release);
@@ -156,9 +155,9 @@ BaseType_t xPortStartScheduler(void)
         PosixV2::Posix::InstallSignalHandler(SIGNAL_RESUME, HandleSignalResume);
         PosixV2::Posix::InstallExtendedSignalHandler(SIGNAL_PERIPHERAL_INTERRUPT, HandleSignalPeripheralInterrupt);
 
-        PosixV2::Kernel::g_state.m_schedulerStarted.store(true, std::memory_order::relaxed);
+        PosixV2::Kernel::g_kernel.m_schedulerStarted.store(true, std::memory_order::relaxed);
         auto selfThreadHandle = pthread_self();
-        PosixV2::Kernel::g_state.m_schedulerThreadHandle.store(selfThreadHandle, std::memory_order::relaxed); 
+        PosixV2::Kernel::g_kernel.m_schedulerThreadHandle.store(selfThreadHandle, std::memory_order::relaxed); 
     }
 
     // Transfer control to current task.
@@ -169,7 +168,7 @@ BaseType_t xPortStartScheduler(void)
 
     // Initialize required peripheral simulator(s).
     {
-        tickPeripheralHandle = PosixV2::Kernel::g_state.AddPeripheral(tickPeripheral);
+        PosixV2::Kernel::g_kernel.AddPeripheral(tickPeripheral);
     }
         
     // Wait for signal to end the scheduler.
@@ -180,12 +179,12 @@ BaseType_t xPortStartScheduler(void)
 
     // Destruct peripheral simulator(s).
     {
-        PosixV2::Kernel::g_state.RemovePeripheral(tickPeripheralHandle);
+        PosixV2::Kernel::g_kernel.RemoveAllPeripherals();
     }
 
     // Destruct remaining task and scheduler state.
     {
-        PosixV2::Kernel::g_state.m_schedulerStarted.store(false, std::memory_order::relaxed);
+        PosixV2::Kernel::g_kernel.m_schedulerStarted.store(false, std::memory_order::relaxed);
         
         vTaskDelete(xTaskGetCurrentTaskHandle());
 
@@ -208,7 +207,7 @@ void vPortEndScheduler(void)
 
     self.m_interruptState.SetInterruptsDisabled();
     PosixV2::Posix::SaveSignalMask();
-    PosixV2::Posix::RaiseSignal(PosixV2::Kernel::g_state.m_schedulerThreadHandle, SIGNAL_SCHEDULER_END);
+    PosixV2::Posix::RaiseSignal(PosixV2::Kernel::g_kernel.m_schedulerThreadHandle, SIGNAL_SCHEDULER_END);
     PosixV2::Posix::ExitThread();
 }
 
@@ -219,7 +218,7 @@ void vPortMemoryBarrier()
 
 void vPortYield()
 {
-    assert(PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed) && "Expecting scheduler to be started");
+    assert(PosixV2::Kernel::g_kernel.m_schedulerStarted.load(std::memory_order::relaxed) && "Expecting scheduler to be started");
     
     vPortEnterCritical();
     
@@ -236,7 +235,7 @@ void vPortYield()
 
 void vPortDisableInterrupts()
 {
-    if (!PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed))
+    if (!PosixV2::Kernel::g_kernel.m_schedulerStarted.load(std::memory_order::relaxed))
         return;
 
     auto& self = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
@@ -245,7 +244,7 @@ void vPortDisableInterrupts()
 
 void vPortEnableInterrupts()
 {
-    if (!PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed))
+    if (!PosixV2::Kernel::g_kernel.m_schedulerStarted.load(std::memory_order::relaxed))
         return;
 
     auto& self = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
@@ -265,7 +264,7 @@ void vPortClearInterruptMask([[maybe_unused]] UBaseType_t xMask)
 
 void vPortEnterCritical(void)
 {
-    if (!PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed))
+    if (!PosixV2::Kernel::g_kernel.m_schedulerStarted.load(std::memory_order::relaxed))
         return;
     
     auto& self = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
@@ -282,7 +281,7 @@ void vPortEnterCritical(void)
 
 void vPortExitCritical(void)
 {
-    if (!PosixV2::Kernel::g_state.m_schedulerStarted.load(std::memory_order::relaxed))
+    if (!PosixV2::Kernel::g_kernel.m_schedulerStarted.load(std::memory_order::relaxed))
         return;
 
     auto& self = PosixV2::TaskContext::BorrowFromCurrentTaskHandle();
@@ -298,12 +297,12 @@ void vPortExitCritical(void)
 void vPortInitializeTimer(void)
 {
     auto now = std::chrono::steady_clock::now();
-    PosixV2::Kernel::g_state.m_schedulerStartTimePoint.store(now, std::memory_order::relaxed);
+    PosixV2::Kernel::g_kernel.m_schedulerStartTimePoint.store(now, std::memory_order::relaxed);
 }
 
 long lPortGetTimerCounter(void)
 {
-    auto start = PosixV2::Kernel::g_state.m_schedulerStartTimePoint.load(std::memory_order::relaxed);
+    auto start = PosixV2::Kernel::g_kernel.m_schedulerStartTimePoint.load(std::memory_order::relaxed);
     auto now = std::chrono::steady_clock::now();
     std::chrono::duration<long, std::nano> duration = now - start;
     auto count = duration.count();

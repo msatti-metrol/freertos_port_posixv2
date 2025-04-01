@@ -17,7 +17,7 @@ namespace PosixV2::Kernel
         Peripheral_t(Peripheral::IPeripheral_t& peripheral);
 
     private:
-        friend class PortState_t;
+        friend class Kernel_t;
         
         static void* ThreadMain(void *v_self);
         bool RaiseInterrupt();
@@ -27,12 +27,14 @@ namespace PosixV2::Kernel
         std::atomic_bool m_stopping;
     };
 
-    struct PortState_t
+    struct Kernel_t
     {
         using PeripheralHandle_t = std::forward_list<Peripheral_t>::iterator;
 
         PeripheralHandle_t AddPeripheral(PosixV2::Peripheral::IPeripheral_t& peripheral);
         void RemovePeripheral(PeripheralHandle_t handle);
+        void RemovePeripheralUnsafe(PeripheralHandle_t handle);
+        void RemoveAllPeripherals();
 
         std::atomic_bool m_schedulerStarted;
         std::atomic<std::chrono::steady_clock::time_point> m_schedulerStartTimePoint;
@@ -42,5 +44,5 @@ namespace PosixV2::Kernel
         std::forward_list<Peripheral_t> m_peripherals;
     };
 
-    extern PortState_t g_state;
+    extern Kernel_t g_kernel;
 }

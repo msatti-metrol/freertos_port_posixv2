@@ -30,7 +30,7 @@ namespace PosixV2::Kernel
 
     bool Peripheral_t::RaiseInterrupt()
     {
-        std::unique_lock lock{PosixV2::Kernel::g_state.m_taskContextLock};
+        std::unique_lock lock{PosixV2::Kernel::g_kernel.m_taskContextLock};
 
         std::atomic_thread_fence(std::memory_order::acquire);
 
@@ -42,14 +42,14 @@ namespace PosixV2::Kernel
                 if (!interruptsEnabled)
                     return false;
 
-                PosixV2::Posix::RaiseContextualSignal(task.m_threadHandle, SIGNAL_PERIPHERAL_INTERRUPT, this);
+                PosixV2::Posix::RaiseContextualSignal(task.m_threadHandle, SIGNAL_PERIPHERAL_INTERRUPT, &m_peripheral);
                 return true;
             });
 
         return result;
     }
 
-    PortState_t::PeripheralHandle_t PortState_t::AddPeripheral(PosixV2::Peripheral::IPeripheral_t& peripheral)
+    Kernel_t::PeripheralHandle_t Kernel_t::AddPeripheral(PosixV2::Peripheral::IPeripheral_t& peripheral)
     {
         std::unique_lock lock{m_peripheralsLock};
 
@@ -58,16 +58,28 @@ namespace PosixV2::Kernel
         return m_peripherals.begin();
     }
     
-    void PortState_t::RemovePeripheral(PeripheralHandle_t peripheral)
+    void Kernel_t::RemovePeripheral(PeripheralHandle_t handle)
     {
         std::unique_lock lock{m_peripheralsLock};
 
-        assert(peripheral->m_threadHandle && "Expected the peripheral thread handle to be valid");
-        peripheral->m_stopping.store(true, std::memory_order::relaxed);
-        PosixV2::Posix::JoinThread(*peripheral->m_threadHandle);
-        peripheral->m_stopping.store(false, std::memory_order::relaxed);
-        peripheral->m_threadHandle = std::nullopt;
+        RemovePeripheralUnsafe(handle);
+    }
+
+    void Kernel_t::RemovePeripheralUnsafe(PeripheralHandle_t handle)
+    {
+        assert(handle->m_threadHandle && "Expected the peripheral thread handle to be valid");
+        handle->m_stopping.store(true, std::memory_order::relaxed);
+        PosixV2::Posix::JoinThread(*handle->m_threadHandle);
+        handle->m_threadHandle = std::nullopt;
     }
     
-    PortState_t g_state;
+    void Kernel_t::RemoveAllPeripherals()
+    {
+        std::unique_lock lock{m_peripheralsLock};
+
+        for (auto handle = m_peripherals.begin(); handle != m_peripherals.end(); handle++)
+            RemovePeripheralUnsafe(handle);
+    }
+    
+    Kernel_t g_kernel;
 }
